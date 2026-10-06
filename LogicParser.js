@@ -1,0 +1,443 @@
+/* 量词展开辅助函数（供 ModelGen 使用）
+   AST 采用与原有逻辑操作符完全相同的 {S,0,1} 决策树结构，
+   因此复用同一套真值表构造，保证语义一致。 */
+var ASTAnd = function (a, b) {
+    return {
+        "S": a,
+        "0": "0",
+        "1": {
+            "S": b,
+            "0": "0",
+            "1": "1"
+        }
+    }
+};
+var ASTOr = function (a, b) {
+    return {
+        "S": a,
+        "0": {
+            "S": b,
+            "0": "0",
+            "1": "1"
+        },
+        "1": "1"
+    }
+};
+/* 将决策树中等于变量名 var 的叶子替换为常量 val（"0"/"1"），
+   用于全称/存在量词按 var=0 与 var=1 展开。 */
+var ASTSubst = function (node, varName, val) {
+    if ("string" == typeof (node)) {
+        return node === varName ? val : node;
+    }
+    return {
+        "S": ASTSubst(node["S"], varName, val),
+        "0": ASTSubst(node["0"], varName, val),
+        "1": ASTSubst(node["1"], varName, val)
+    };
+};
+
+function LogicParser(npn) {
+    var andM = function (a, b) {
+        return {
+            "S": a,
+            "0": "0",
+            "1": {
+                "S": b,
+                "0": "0",
+                "1": "1"
+            }
+        }
+    };
+    var orM = function (a, b) {
+        return {
+            "S": a,
+            "0": {
+                "S": b,
+                "0": "0",
+                "1": "1"
+            },
+            "1": "1"
+        }
+    };
+    var notM = function (a) {
+        return {
+            "S": a,
+            "0": "1",
+            "1": "0"
+        }
+    };
+    var infM = function (a, b) {
+        return {
+            "S": a,
+            "0": "1",
+            "1": {
+                "S": b,
+                "0": "0",
+                "1": "1"
+            }
+        }
+    };
+    var equalM = function (a, b) {
+        return {
+            "S": a,
+            "0": {
+                "S": b,
+                "0": "1",
+                "1": "0"
+            },
+            "1": {
+                "S": b,
+                "0": "0",
+                "1": "1"
+            }
+        }
+    };
+    var state = 0;
+    var nstate = 0;
+    /* state is
+       0: tic
+       1: toc
+       we parse:
+       ".": "and",
+       ",": "or",
+       ">": "infer",
+       "<": "not"
+       "=": "equal"
+       "@": "FORALL"
+       "!": "EXISTS"
+     */
+    if ("" == npn) { return "Empty String!" };
+    for (var e = [], s = npn.split(/(\.|,|<|>|=|@|!|\s)/), t = 0;
+        t < s.length; t++) {
+        var n = s[t];
+        if ("" == n) { }
+        else if (n.match(/\s/)) {
+            if (1 == state) { state = 0; nstate++; }
+        }
+        else if (n.match(/\./)) {
+            var temp1 = e.pop();
+            var temp2 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1 || undefined == temp2) {
+                return "Format Error: arguments less than needed"
+            }
+            else {
+                e.push(andM(temp2, temp1));
+                nstate--;
+            }
+        }
+        else if (n.match(/,/)) {
+            var temp1 = e.pop();
+            var temp2 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1 || undefined == temp2) {
+                return "Format Error: arguments less than needed"
+            }
+            else {
+                e.push(orM(temp2, temp1));
+                nstate--;
+            }
+        }
+        else if (n.match(/</)) {
+            var temp1 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1) {
+                return "Format Error: arguments less than needed"
+            }
+            else {
+                e.push(notM(temp1));
+            }
+        }
+        else if (n.match(/>/)) {
+            var temp1 = e.pop();
+            var temp2 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1 || undefined == temp2) {
+                return "Format Error: arguments less than needed"
+            }
+            else {
+                e.push(infM(temp2, temp1));
+                nstate--;
+            }
+        }
+        else if (n.match(/=/)) {
+            var temp1 = e.pop();
+            var temp2 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1 || undefined == temp2) {
+                return "Format Error: arguments less than needed"
+            }
+            else {
+                e.push(equalM(temp2, temp1));
+                nstate--;
+            }
+        }
+        else if (n.match(/@/)) {
+            /* 全称量词：P x @  =>  { Q:"FORALL", var:x, body:P } */
+            var temp1 = e.pop();
+            var temp2 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1 || undefined == temp2) {
+                return "Format Error: arguments less than needed"
+            }
+            else if ("string" != typeof (temp1)) {
+                return "Format Error: quantify variable must be a name"
+            }
+            else {
+                e.push({ "Q": "FORALL", "var": temp1, "body": temp2 });
+                nstate--;
+            }
+        }
+        else if (n.match(/!/)) {
+            /* 存在量词：P x !  =>  { Q:"EXISTS", var:x, body:P } */
+            var temp1 = e.pop();
+            var temp2 = e.pop();
+            if (1 == state) {
+                return "use wrong Name as variable"
+            }
+            else if (undefined == temp1 || undefined == temp2) {
+                return "Format Error: arguments less than needed"
+            }
+            else if ("string" != typeof (temp1)) {
+                return "Format Error: quantify variable must be a name"
+            }
+            else {
+                e.push({ "Q": "EXISTS", "var": temp1, "body": temp2 });
+                nstate--;
+            }
+        }
+        else {
+            if (0 == state) {
+                state = 1;
+                e.push(n);
+            }
+
+        }
+
+    };
+    if (nstate > 1) { return "Format Error: arguments more than needed" };
+    return e.pop();
+};
+
+function ModelGen(np) {
+    /* 0:"<"
+       1:">" */
+    var result = {
+        value: [],
+        order: []
+    };
+    /* 量词展开：
+       ∀x P  =>  P[x:=0] 与 P[x:=1] 的合取
+       ∃x P  =>  P[x:=0] 与 P[x:=1] 的析取
+       展开为原有 {S,0,1} 决策树后递归交给 ModelGen。 */
+    if (np && "object" == typeof (np) && undefined != np.Q && undefined != np.body) {
+        var body0 = ASTSubst(np.body, np["var"], "0");
+        var body1 = ASTSubst(np.body, np["var"], "1");
+        if ("FORALL" == np.Q) {
+            return ModelGen(ASTAnd(body0, body1));
+        } else {
+            return ModelGen(ASTOr(body0, body1));
+        }
+    }
+    if ("string" == typeof (np)) {
+        if ("1" == np) {
+            result.value = [{ ".": ">" }];
+            result.order = [];
+        } else if ("0" == np) {
+            result.value = [{ ".": "<" }];
+            result.order = [];
+        } else {
+            var temp1 = { ".": ">" };
+            var temp2 = { ".": "<" };
+            temp1[np] = ">";
+            temp2[np] = "<";
+            result.value = [temp1, temp2];
+            result.order = [np];
+        }
+
+    }
+    else {
+        var result1 = ModelGen(np.S);
+
+        if (0 == result1.order.length) {
+            if ("<" == result1.value[0]["."]) {
+                result = ModelGen(np[0]);
+            } else {
+                result = ModelGen(np[1]);
+            }
+        }
+        else {
+            var myset = new Set(result1.order);
+
+            var result2 = ModelGen(np[0]);
+            var intersection2 = result2.order.filter(x => myset.has(x));
+
+            var result3 = ModelGen(np[1]);
+            var intersection3 = result3.order.filter(x => myset.has(x));
+
+            var all0 = false;
+            var all1 = false;
+
+            for (let x of result1.value) {
+                if ("<" == x["."]) {
+                    for (let y of result2.value) {
+                        var YesOrNot = true;
+                        for (let z of intersection2) {
+                            if (undefined != x[z] && undefined != y[z] && x[z] != y[z]) {
+                                YesOrNot = false;
+                                break;
+                            }
+                        };
+                        if (YesOrNot) {
+                            var newValue = {};
+                            for (var k in x) {
+                                var item = x[k];
+                                newValue[k] = item;
+                            }
+                            for (let alpha of result2.order) {
+                                if (undefined != y[alpha]) {
+                                    newValue[alpha] = y[alpha];
+                                }
+                            };
+                            newValue["."] = y["."];
+                            if (">" == newValue["."]) {
+                                all1 = true;
+                            } else {
+                                all0 = true;
+                            };
+                            result.value.push(newValue);
+                        }
+                    }
+                }
+                else {
+                    for (let y of result3.value) {
+                        var YesOrNot = true;
+                        for (let z of intersection3) {
+                            if (undefined != x[z] && undefined != y[z] && x[z] != y[z]) {
+                                YesOrNot = false;
+                                break;
+                            }
+                        };
+                        if (YesOrNot) {
+                            var newValue = {};
+                            for (var k in x) {
+                                var item = x[k];
+                                newValue[k] = item;
+                            }
+                            for (let alpha of result3.order) {
+                                if (undefined != y[alpha]) {
+                                    newValue[alpha] = y[alpha];
+                                }
+                            };
+                            newValue["."] = y["."];
+                            if (">" == newValue["."]) {
+                                all1 = true;
+                            } else {
+                                all0 = true;
+                            };
+                            result.value.push(newValue);
+                        }
+                    }
+                }
+            };
+            if (all0 && !all1) {
+                result = {
+                    value: [{ ".": "<" }],
+                    order: []
+                }
+            } else if (all1 && !all0) {
+                result = {
+                    value: [{ ".": ">" }],
+                    order: []
+                }
+            }
+            else {
+                var tempOrder = new Set(
+                    result1.order.concat(result2.order).concat(result3.order)
+                );
+                result.order = Array.from(tempOrder);
+            }
+        }
+    }
+    return result;
+}
+
+function ViewGen(pn) {
+    var countKey = 2;
+    var result = {
+        nodeArray: [
+            { "key": "0", "type": "0", "name": "Zero" },
+            { "key": 1, "type": "1", "name": "One" },
+            { "key": 2, "type": "Export", "name": "Out" }
+        ],
+        linkArray: []
+    }
+    function ViewGen0(pnp, NodeKey, PortId) {
+        if (1 == pnp.value.length) {
+            if ("<" == pnp.value[0]["."]) {
+                return {
+                    nodeArray: [],
+                    linkArray: [{ "from": "0", "frompid": "OUT", "to": NodeKey, "topid": PortId }]
+                };
+            } else {
+                return {
+                    nodeArray: [],
+                    linkArray: [{ "from": 1, "frompid": "OUT", "to": NodeKey, "topid": PortId }]
+                };
+            }
+        }
+        else {
+            var CName = "";
+            for (CName0 of pnp.order) {
+                if (pnp.value.length == pnp.value.filter(function (x) { return undefined != x[CName0] }).length) {
+                    CName = CName0;
+                }
+            }
+
+            if ("" != CName) {
+                var TempOrder = pnp.order.filter(function(x){
+                    return x  != CName
+                });
+
+                var pnp1 = {
+                    value: pnp.value.filter(function (x) { return "<" == x[CName] }),
+                    order: TempOrder
+                };
+                var pnp2 = {
+                    value: pnp.value.filter(function (x) { return ">" == x[CName] }),
+                    order: TempOrder
+                };
+
+                countKey++;
+                var NodeKeyNow = countKey;
+                var NodeLink1 = ViewGen0(pnp1, NodeKeyNow, "0");
+                var NodeLink2 = ViewGen0(pnp2, NodeKeyNow, "1");
+
+                return {
+                    nodeArray: [{ "key": NodeKeyNow, "type": "SEL" }].concat(NodeLink1.nodeArray, NodeLink2.nodeArray),
+                    linkArray: [{ "from": NodeKeyNow, "frompid": "N", "to": NodeKey, "topid": PortId },
+                    { "from": CName, "frompid": "OUT", "to": NodeKeyNow, "topid": "SI" }].concat(NodeLink1.linkArray, NodeLink2.linkArray)
+                };
+            }
+        }
+    };
+    for (x of pn.order) {
+        result.nodeArray = result.nodeArray.concat({ "key": x, "type": "Import", "name": x })
+    }
+    var temp = ViewGen0(pn, countKey, "OUT");
+    result.nodeArray = result.nodeArray.concat(temp.nodeArray);
+    result.linkArray = result.linkArray.concat(temp.linkArray);
+    return result;
+}
